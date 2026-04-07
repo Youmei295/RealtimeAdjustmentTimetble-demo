@@ -22,7 +22,21 @@ class TimetableService:
         """Returns the list of pending requests for the admin queue."""
         return self._pending_requests
 
-    # --- TRANSACTION LOGIC ---
+    # --- TRANSACTION LOGIC (The JSON Router) ---
+
+    def process_command(self, command: dict) -> dict:
+        """
+        The entry point for all incoming JSON payloads.
+        Routes the dictionary to the correct logic based on member_id.
+        """
+        member_id = command.get("member_id")
+        
+        # 1. Admin bypass (ID 000) executes immediately
+        if member_id == "000":
+            return self._execute_admin_command(command)
+        
+        # 2. Member logic goes to the pending queue
+        return self._queue_request(command)
 
     def _execute_admin_command(self, cmd: dict) -> dict:
         """Internal: Admin executes changes immediately."""
@@ -45,6 +59,13 @@ class TimetableService:
             
         return {"status": "error", "msg": "Unknown admin action"}
 
+    def _queue_request(self, cmd: dict) -> dict:
+        """Internal: Non-admin requests are stored for review."""
+        cmd["request_id"] = self._request_id_counter
+        self._pending_requests.append(cmd)
+        self._request_id_counter += 1
+        return {"status": "pending", "request_id": cmd["request_id"]}
+
     def _resolve_pending(self, req_id: int, approved: bool) -> dict:
         """Executes a queued request if admin approves."""
         req = next((r for r in self._pending_requests if r["request_id"] == req_id), None)
@@ -66,37 +87,6 @@ class TimetableService:
                 
             elif action in ["REMOVE", "ADMIN_REMOVE"]:
                 self._grid[req["date"]][req["time"]] = None
-                print(f"[AUDIT LOG] Approved Request {req_id} removed {req['time']}. Reason: {reason}")
-                
-            return {"status": "success", "applied_req": req_id}
-        
-        return {"status": "rejected", "applied_req": req_id}
-
-    def _queue_request(self, cmd: dict) -> dict:
-        """Internal: Non-admin requests are stored for review."""
-        cmd["request_id"] = self._request_id_counter
-        self._pending_requests.append(cmd)
-        self._request_id_counter += 1
-        return {"status": "pending", "request_id": cmd["request_id"]}
-
-    def _resolve_pending(self, req_id: int, approved: bool) -> dict:
-        """Executes a queued request if admin approves."""
-        req = next((r for r in self._pending_requests if r["request_id"] == req_id), None)
-        if not req:
-            return {"status": "error", "msg": "Request not found"}
-
-        self._pending_requests.remove(req)
-        
-        if approved:
-            action = req.get("action")
-            if action in ["ADD", "OVERWRITE"]:
-                self._grid[req["date"]][req["time"]] = {
-                    "member_id": req["member_id"], 
-                    "task": req.get("task", "Task")
-                }
-            elif action in ["REMOVE", "ADMIN_REMOVE"]:
-                self._grid[req["date"]][req["time"]] = None
-                reason = req.get("reason", "No reason provided")
                 print(f"[AUDIT LOG] Approved Request {req_id} removed {req['time']}. Reason: {reason}")
                 
             return {"status": "success", "applied_req": req_id}

@@ -1,156 +1,182 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Cloud Timetable</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Cloud Timetable</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .slot-btn { transition: all 0.2s; border-radius: 8px; }
+        .slot-btn:hover { transform: scale(1.01); }
+        #badge { font-size: 0.8rem; vertical-align: middle; }
+    </style>
 </head>
 <body class="bg-light p-4">
-    <div class="container bg-white p-4 rounded shadow">
-        <h2 class="text-center mb-4">Real-Time Timetable Service</h2>
+    <div class="container bg-white p-4 rounded shadow-sm" style="max-width: 800px;">
+        <h2 class="text-center mb-4 text-primary">Live Timetable Service</h2>
         
-        <ul class="nav nav-tabs" id="myTab">
-            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#gridTab">Grid</button></li>
-            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#adminTab">Admin <span id="badge" class="badge bg-danger">0</span></button></li>
+        <ul class="nav nav-tabs mb-3" id="mainTabs" role="tablist">
+            <li class="nav-item">
+                <button class="nav-link active" id="grid-tab" data-bs-toggle="tab" data-bs-target="#gridTab" type="button">
+                    Timetable Grid
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" id="admin-tab" data-bs-toggle="tab" data-bs-target="#adminTab" type="button">
+                    Admin Approvals <span id="badge" class="badge bg-danger">0</span>
+                </button>
+            </li>
         </ul>
 
-        <div class="tab-content p-3">
+        <div class="tab-content">
             <div class="tab-pane fade show active" id="gridTab">
-                <div id="timetable-container" class="list-group"></div>
+                <div id="timetable-container" class="d-grid gap-2">
+                    </div>
             </div>
 
             <div class="tab-pane fade" id="adminTab">
-                <div id="pending-list" class="list-group mb-3"></div>
+                <div id="pending-list" class="list-group">
+                    </div>
+                <div id="empty-msg" class="text-center text-muted mt-3" style="display: none;">
+                    No pending requests at the moment.
+                </div>
             </div>
         </div>
     </div>
 
- <script>
-        const API_URL = "http://localhost:8000";
+    <script>
+        // Use the WebSocket protocol (ws://) instead of HTTP (http://)
+        const socket = new WebSocket("ws://localhost:8000/ws");
+        const TARGET_DATE = "2026-04-07";
 
-        async function refresh() {
-            const res = await fetch(`${API_URL}/state`);
-            const data = await res.json();
+        // --- 1. RECEIVING DATA FROM SERVER ---
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            console.log("Real-time update received:", data);
             
-            // Render Grid
+            // Re-render both tabs whenever the server broadcasts a change
+            renderGrid(data.grid[TARGET_DATE]);
+            renderAdminQueue(data.pending);
+        };
+
+        socket.onclose = function() {
+            alert("Connection lost. Please refresh the page or restart the backend server.");
+        };
+
+        // --- 2. RENDERING LOGIC ---
+        function renderGrid(dayData) {
             const container = document.getElementById('timetable-container');
             container.innerHTML = "";
-            const dayData = data.grid["2026-04-07"];
             
             for (const [time, slot] of Object.entries(dayData)) {
-                const text = slot ? `${slot.member_id}: ${slot.task}` : "[ Empty Slot ]";
-                const color = slot ? (slot.member_id === "000" ? "btn-warning" : "btn-info") : "btn-outline-secondary";
-                const isOccupied = slot ? true : false;
+                const isOccupied = slot !== null;
+                const displayText = isOccupied ? `${slot.member_id}: ${slot.task}` : "[ Empty Slot ]";
                 
+                // Color coding: Gold for Admin, LightBlue for Members, Gray for Empty
+                let btnClass = "btn-outline-secondary";
+                if (isOccupied) {
+                    btnClass = (slot.member_id === "000") ? "btn-warning" : "btn-info";
+                }
+
                 container.innerHTML += `
-                    <div class="d-flex mb-2 align-items-center">
-                        <b class="me-3" style="width:60px">${time}</b>
-                        <button class="btn ${color} w-100" onclick="sendRequest('${time}', ${isOccupied})">${text}</button>
+                    <div class="d-flex align-items-center mb-2">
+                        <div class="fw-bold me-3 text-secondary" style="width: 70px;">${time}</div>
+                        <button class="btn ${btnClass} w-100 text-start slot-btn p-3" 
+                                onclick="handleClick('${time}', ${isOccupied})">
+                            ${displayText}
+                        </button>
                     </div>`;
             }
-
-            // Render Admin Queue with Reasons
-            document.getElementById('badge').innerText = data.pending.length;
-            const adminList = document.getElementById('pending-list');
-            adminList.innerHTML = data.pending.map(req => `
-                <div class="list-group-item">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span><b class="text-primary">${req.action}</b> Request at <b>${req.time}</b> by User ${req.member_id}</span>
-                        <div>
-                            <button class="btn btn-sm btn-success" onclick="approve(${req.request_id}, true)">Approve</button>
-                            <button class="btn btn-sm btn-danger" onclick="approve(${req.request_id}, false)">Reject</button>
-                        </div>
-                    </div>
-                    ${req.reason ? `<small class="text-muted"><b>Reason:</b> ${req.reason}</small>` : ''}
-                </div>
-            `).join('');
         }
 
-        async function sendRequest(time, isOccupied) {
+        function renderAdminQueue(pending) {
+            const list = document.getElementById('pending-list');
+            const badge = document.getElementById('badge');
+            const emptyMsg = document.getElementById('empty-msg');
+            
+            badge.innerText = pending.length;
+            list.innerHTML = "";
+            
+            if (pending.length === 0) {
+                emptyMsg.style.display = "block";
+                return;
+            }
+            emptyMsg.style.display = "none";
+
+            pending.forEach(req => {
+                list.innerHTML += `
+                    <div class="list-group-item list-group-item-action mb-2 border rounded">
+                        <div class="d-flex w-100 justify-content-between align-items-center">
+                            <h6 class="mb-1 text-uppercase fw-bold text-primary">${req.action} Request</h6>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-success" onclick="processApproval(${req.request_id}, true)">Approve</button>
+                                <button class="btn btn-sm btn-danger" onclick="processApproval(${req.request_id}, false)">Reject</button>
+                            </div>
+                        </div>
+                        <p class="mb-1"><b>User:</b> ${req.member_id} | <b>Time:</b> ${req.time} | <b>Task:</b> ${req.task || 'N/A'}</p>
+                        <small class="text-muted italic"><b>Reason:</b> ${req.reason}</small>
+                    </div>`;
+            });
+        }
+
+        // --- 3. SENDING COMMANDS TO SERVER ---
+        function handleClick(time, isOccupied) {
             let action = "ADD";
             let reason = "";
 
-            // 1. Determine Action and Handle "Cancel Process"
             if (isOccupied) {
-                const choice = prompt("Slot is occupied!\nType 'O' to Overwrite.\nType 'D' to Delete.\n(Click Cancel to abort)");
+                const choice = prompt("Slot is occupied!\nType 'O' to Overwrite.\nType 'D' to Delete.\n(Cancel to abort)");
+                if (!choice) return; // Cancel Process
                 
-                if (!choice) {
-                    alert("Process cancelled.");
-                    return; 
-                }
-                
-                const formatChoice = choice.toUpperCase().trim();
-                if (formatChoice === 'O') {
-                    action = "OVERWRITE";
-                } else if (formatChoice === 'D') {
-                    action = "REMOVE";
-                } else {
-                    alert("Invalid input. Process cancelled.");
-                    return; 
-                }
+                const c = choice.toUpperCase();
+                if (c === 'O') action = "OVERWRITE";
+                else if (c === 'D') action = "REMOVE";
+                else return alert("Invalid choice.");
             }
 
-            // 2. Collect ID
             const uid = prompt("Enter Member ID (000 for Admin):");
-            if (!uid) {
-                alert("Process cancelled.");
-                return;
-            }
+            if (!uid) return;
 
-            // 3. Separate Admin Delete Logic
-            if (uid === "000" && action === "REMOVE") {
-                action = "ADMIN_REMOVE";
-            }
+            // Differentiate member vs admin delete
+            if (uid === "000" && action === "REMOVE") action = "ADMIN_REMOVE";
 
-            // 4. Collect Task (Only if Adding/Overwriting)
             let task = "";
             if (action === "ADD" || action === "OVERWRITE") {
-                task = prompt("Enter Task:");
-                if (!task) {
-                    alert("Task is required. Process cancelled.");
-                    return;
-                }
+                task = prompt("Enter Task Description:");
+                if (!task) return alert("Task is required.");
             }
 
-            // 5. Collect Reason (Now required for ALL actions)
-            reason = prompt(`Provide a reason for this ${action} action:`);
-            if (!reason) {
-                alert("A reason must be provided for clarification. Process cancelled.");
-                return;
-            }
+            // Reason is required for every network-bound action
+            reason = prompt(`Why are you performing this ${action}?`);
+            if (!reason) return alert("A reason is required for the audit trail.");
 
-            // 6. Build and Send the JSON Payload
-            const payload = { 
-                action: action, 
-                member_id: uid, 
-                target_member: uid, 
-                date: "2026-04-07", 
-                time: time, 
+            const payload = {
+                action: action,
+                member_id: uid,
+                target_member: uid,
+                date: TARGET_DATE,
+                time: time,
                 task: task,
-                reason: reason // Applies to ADD, OVERWRITE, REMOVE, and ADMIN_REMOVE
+                reason: reason
             };
 
-            await fetch(`${API_URL}/command`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            });
-            
-            refresh();
+            // Send JSON via WebSocket
+            socket.send(JSON.stringify(payload));
         }
 
-        async function approve(reqId, isApproved) {
-            const adminId = prompt("Enter Admin ID (000):");
-            if (adminId !== "000") return alert("Unauthorized");
+        function processApproval(reqId, approved) {
+            const adminId = prompt("Enter Admin Auth ID (000):");
+            if (adminId !== "000") return alert("Unauthorized access.");
 
-            await fetch(`${API_URL}/command`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ action: "APPROVE_PENDING", member_id: "000", request_id: reqId, approved: isApproved })
-            });
-            refresh();
+            const payload = {
+                action: "APPROVE_PENDING",
+                member_id: "000",
+                request_id: reqId,
+                approved: approved
+            };
+
+            socket.send(JSON.stringify(payload));
         }
-
-        refresh(); // Initial load
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
