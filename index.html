@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cloud Timetable</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light p-4">
+    <div class="container bg-white p-4 rounded shadow">
+        <h2 class="text-center mb-4">Real-Time Timetable Service</h2>
+        
+        <ul class="nav nav-tabs" id="myTab">
+            <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#gridTab">Grid</button></li>
+            <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#adminTab">Admin <span id="badge" class="badge bg-danger">0</span></button></li>
+        </ul>
+
+        <div class="tab-content p-3">
+            <div class="tab-pane fade show active" id="gridTab">
+                <div id="timetable-container" class="list-group"></div>
+            </div>
+
+            <div class="tab-pane fade" id="adminTab">
+                <div id="pending-list" class="list-group mb-3"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://localhost:8000";
+
+        async function refresh() {
+            const res = await fetch(`${API_URL}/state`);
+            const data = await res.json();
+            
+            // Render Grid
+            const container = document.getElementById('timetable-container');
+            container.innerHTML = "";
+            const dayData = data.grid["2026-04-07"];
+            
+            for (const [time, slot] of Object.entries(dayData)) {
+                const text = slot ? `${slot.member_id}: ${slot.task}` : "[ Empty Slot ]";
+                const color = slot ? (slot.member_id === "000" ? "btn-warning" : "btn-info") : "btn-outline-secondary";
+                
+                container.innerHTML += `
+                    <div class="d-flex mb-2 align-items-center">
+                        <b class="me-3" style="width:60px">${time}</b>
+                        <button class="btn ${color} w-100" onclick="sendRequest('${time}', '${slot? 'REMOVE' : 'ADD'}')">${text}</button>
+                    </div>`;
+            }
+
+            // Render Admin Queue
+            document.getElementById('badge').innerText = data.pending.length;
+            const adminList = document.getElementById('pending-list');
+            adminList.innerHTML = data.pending.map(req => `
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <span><b>${req.action}</b>: ${req.time} by User ${req.member_id}</span>
+                    <div>
+                        <button class="btn btn-sm btn-success" onclick="approve(${req.request_id}, true)">Approve</button>
+                        <button class="btn btn-sm btn-danger" onclick="approve(${req.request_id}, false)">Reject</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function sendRequest(time, action) {
+            const uid = prompt("Enter Member ID:");
+            if(!uid) return;
+            const task = (action === "ADD") ? prompt("Enter Task:") : "";
+            
+            await fetch(`${API_URL}/command`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ action, member_id: uid, target_member: uid, date: "2026-04-07", time, task })
+            });
+            refresh();
+        }
+
+        async function approve(reqId, isApproved) {
+            const adminId = prompt("Enter Admin ID (000):");
+            if(adminId !== "000") return alert("Unauthorized");
+
+            await fetch(`${API_URL}/command`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ action: "APPROVE_PENDING", member_id: "000", request_id: reqId, approved: isApproved })
+            });
+            refresh();
+        }
+
+        refresh(); // Initial load
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
