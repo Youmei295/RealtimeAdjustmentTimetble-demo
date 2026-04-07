@@ -18,41 +18,59 @@ class TimetableService:
         """Returns the current state for syncing new clients."""
         return self._grid
 
-    # --- TRANSACTION LOGIC (The "Engine") ---
+    def get_pending(self) -> list:
+        """Returns the list of pending requests for the admin queue."""
+        return self._pending_requests
 
-    def process_command(self, command: dict) -> dict:
-        """
-        The entry point for all incoming JSON/Dictionary commands.
-        Example command: {"action": "ADD", "member_id": "123", "date": "...", "time": "..."}
-        """
-        action = command.get("action")
-        member_id = command.get("member_id")
-        
-        # 1. Admin bypass (ID 000)
-        if member_id == "000":
-            return self._execute_admin_command(command)
-        
-        # 2. Member logic (Must go to queue)
-        return self._queue_request(command)
+    # --- TRANSACTION LOGIC ---
 
     def _execute_admin_command(self, cmd: dict) -> dict:
         """Internal: Admin executes changes immediately."""
         action = cmd.get("action")
         date, time = cmd.get("date"), cmd.get("time")
+        reason = cmd.get("reason", "No reason provided")
 
-        if action == "ADD":
-            # Admin forces the update (overwrites if necessary)
-            self._grid[date][time] = {"member_id": cmd["target_member"], "task": cmd["task"]}
-            return {"status": "success", "msg": "Admin applied change"}
+        if action in ["ADD", "OVERWRITE"]:
+            self._grid[date][time] = {"member_id": cmd.get("target_member", "000"), "task": cmd.get("task", "Task")}
+            print(f"[AUDIT LOG] Admin executed {action} at {time}. Reason: {reason}")
+            return {"status": "success", "msg": f"Admin applied {action}"}
         
-        elif action == "REMOVE":
+        elif action in ["REMOVE", "ADMIN_REMOVE"]:
             self._grid[date][time] = None
+            print(f"[AUDIT LOG] Admin deleted {time} slot. Reason: {reason}")
             return {"status": "success", "msg": "Admin cleared slot"}
         
         elif action == "APPROVE_PENDING":
-            return self._resolve_pending(cmd.get("request_id"), approved=True)
+            return self._resolve_pending(cmd.get("request_id"), cmd.get("approved", False))
             
         return {"status": "error", "msg": "Unknown admin action"}
+
+    def _resolve_pending(self, req_id: int, approved: bool) -> dict:
+        """Executes a queued request if admin approves."""
+        req = next((r for r in self._pending_requests if r["request_id"] == req_id), None)
+        if not req:
+            return {"status": "error", "msg": "Request not found"}
+
+        self._pending_requests.remove(req)
+        
+        if approved:
+            action = req.get("action")
+            reason = req.get("reason", "No reason provided")
+            
+            if action in ["ADD", "OVERWRITE"]:
+                self._grid[req["date"]][req["time"]] = {
+                    "member_id": req["member_id"], 
+                    "task": req.get("task", "Task")
+                }
+                print(f"[AUDIT LOG] Approved Request {req_id} ({action}) at {req['time']}. Reason: {reason}")
+                
+            elif action in ["REMOVE", "ADMIN_REMOVE"]:
+                self._grid[req["date"]][req["time"]] = None
+                print(f"[AUDIT LOG] Approved Request {req_id} removed {req['time']}. Reason: {reason}")
+                
+            return {"status": "success", "applied_req": req_id}
+        
+        return {"status": "rejected", "applied_req": req_id}
 
     def _queue_request(self, cmd: dict) -> dict:
         """Internal: Non-admin requests are stored for review."""
@@ -68,15 +86,19 @@ class TimetableService:
             return {"status": "error", "msg": "Request not found"}
 
         self._pending_requests.remove(req)
+        
         if approved:
-            # Force the move into the grid
-            self._grid[req["date"]][req["time"]] = {
-                "member_id": req["member_id"], 
-                "task": req.get("task", "Task")
-            }
+            action = req.get("action")
+            if action in ["ADD", "OVERWRITE"]:
+                self._grid[req["date"]][req["time"]] = {
+                    "member_id": req["member_id"], 
+                    "task": req.get("task", "Task")
+                }
+            elif action in ["REMOVE", "ADMIN_REMOVE"]:
+                self._grid[req["date"]][req["time"]] = None
+                reason = req.get("reason", "No reason provided")
+                print(f"[AUDIT LOG] Approved Request {req_id} removed {req['time']}. Reason: {reason}")
+                
             return {"status": "success", "applied_req": req_id}
         
         return {"status": "rejected", "applied_req": req_id}
-
-    def get_pending(self) -> list:
-        return self._pending_requests

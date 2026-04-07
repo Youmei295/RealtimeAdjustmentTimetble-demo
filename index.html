@@ -24,7 +24,7 @@
         </div>
     </div>
 
-    <script>
+ <script>
         const API_URL = "http://localhost:8000";
 
         async function refresh() {
@@ -39,44 +39,108 @@
             for (const [time, slot] of Object.entries(dayData)) {
                 const text = slot ? `${slot.member_id}: ${slot.task}` : "[ Empty Slot ]";
                 const color = slot ? (slot.member_id === "000" ? "btn-warning" : "btn-info") : "btn-outline-secondary";
+                const isOccupied = slot ? true : false;
                 
                 container.innerHTML += `
                     <div class="d-flex mb-2 align-items-center">
                         <b class="me-3" style="width:60px">${time}</b>
-                        <button class="btn ${color} w-100" onclick="sendRequest('${time}', '${slot? 'REMOVE' : 'ADD'}')">${text}</button>
+                        <button class="btn ${color} w-100" onclick="sendRequest('${time}', ${isOccupied})">${text}</button>
                     </div>`;
             }
 
-            // Render Admin Queue
+            // Render Admin Queue with Reasons
             document.getElementById('badge').innerText = data.pending.length;
             const adminList = document.getElementById('pending-list');
             adminList.innerHTML = data.pending.map(req => `
-                <div class="list-group-item d-flex justify-content-between align-items-center">
-                    <span><b>${req.action}</b>: ${req.time} by User ${req.member_id}</span>
-                    <div>
-                        <button class="btn btn-sm btn-success" onclick="approve(${req.request_id}, true)">Approve</button>
-                        <button class="btn btn-sm btn-danger" onclick="approve(${req.request_id}, false)">Reject</button>
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span><b class="text-primary">${req.action}</b> Request at <b>${req.time}</b> by User ${req.member_id}</span>
+                        <div>
+                            <button class="btn btn-sm btn-success" onclick="approve(${req.request_id}, true)">Approve</button>
+                            <button class="btn btn-sm btn-danger" onclick="approve(${req.request_id}, false)">Reject</button>
+                        </div>
                     </div>
+                    ${req.reason ? `<small class="text-muted"><b>Reason:</b> ${req.reason}</small>` : ''}
                 </div>
             `).join('');
         }
 
-        async function sendRequest(time, action) {
-            const uid = prompt("Enter Member ID:");
-            if(!uid) return;
-            const task = (action === "ADD") ? prompt("Enter Task:") : "";
-            
+        async function sendRequest(time, isOccupied) {
+            let action = "ADD";
+            let reason = "";
+
+            // 1. Determine Action and Handle "Cancel Process"
+            if (isOccupied) {
+                const choice = prompt("Slot is occupied!\nType 'O' to Overwrite.\nType 'D' to Delete.\n(Click Cancel to abort)");
+                
+                if (!choice) {
+                    alert("Process cancelled.");
+                    return; 
+                }
+                
+                const formatChoice = choice.toUpperCase().trim();
+                if (formatChoice === 'O') {
+                    action = "OVERWRITE";
+                } else if (formatChoice === 'D') {
+                    action = "REMOVE";
+                } else {
+                    alert("Invalid input. Process cancelled.");
+                    return; 
+                }
+            }
+
+            // 2. Collect ID
+            const uid = prompt("Enter Member ID (000 for Admin):");
+            if (!uid) {
+                alert("Process cancelled.");
+                return;
+            }
+
+            // 3. Separate Admin Delete Logic
+            if (uid === "000" && action === "REMOVE") {
+                action = "ADMIN_REMOVE";
+            }
+
+            // 4. Collect Task (Only if Adding/Overwriting)
+            let task = "";
+            if (action === "ADD" || action === "OVERWRITE") {
+                task = prompt("Enter Task:");
+                if (!task) {
+                    alert("Task is required. Process cancelled.");
+                    return;
+                }
+            }
+
+            // 5. Collect Reason (Now required for ALL actions)
+            reason = prompt(`Provide a reason for this ${action} action:`);
+            if (!reason) {
+                alert("A reason must be provided for clarification. Process cancelled.");
+                return;
+            }
+
+            // 6. Build and Send the JSON Payload
+            const payload = { 
+                action: action, 
+                member_id: uid, 
+                target_member: uid, 
+                date: "2026-04-07", 
+                time: time, 
+                task: task,
+                reason: reason // Applies to ADD, OVERWRITE, REMOVE, and ADMIN_REMOVE
+            };
+
             await fetch(`${API_URL}/command`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ action, member_id: uid, target_member: uid, date: "2026-04-07", time, task })
+                body: JSON.stringify(payload)
             });
+            
             refresh();
         }
 
         async function approve(reqId, isApproved) {
             const adminId = prompt("Enter Admin ID (000):");
-            if(adminId !== "000") return alert("Unauthorized");
+            if (adminId !== "000") return alert("Unauthorized");
 
             await fetch(`${API_URL}/command`, {
                 method: 'POST',
