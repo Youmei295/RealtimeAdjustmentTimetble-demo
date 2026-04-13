@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Cloud Timetable</title>
+    <title>Modular Cloud Timetable</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .slot-btn { transition: all 0.2s; border-radius: 8px; }
         .slot-btn:hover { transform: scale(1.01); }
-        #badge { font-size: 0.8rem; vertical-align: middle; }
     </style>
 </head>
 <body class="bg-light p-4">
@@ -21,12 +20,10 @@
         
         <ul class="nav nav-tabs mb-3" id="mainTabs" role="tablist">
             <li class="nav-item">
-                <button class="nav-link active" id="grid-tab" data-bs-toggle="tab" data-bs-target="#gridTab" type="button">
-                    Timetable Grid
-                </button>
+                <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#gridTab" type="button">Grid</button>
             </li>
             <li class="nav-item" id="admin-nav" style="display: none;">
-                <button class="nav-link" id="admin-tab" data-bs-toggle="tab" data-bs-target="#adminTab" type="button">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#adminTab" type="button">
                     Admin Approvals <span id="badge" class="badge bg-danger">0</span>
                 </button>
             </li>
@@ -36,170 +33,14 @@
             <div class="tab-pane fade show active" id="gridTab">
                 <div id="timetable-container" class="d-grid gap-2"></div>
             </div>
-
             <div class="tab-pane fade" id="adminTab">
                 <div id="pending-list" class="list-group"></div>
-                <div id="empty-msg" class="text-center text-muted mt-3" style="display: none;">
-                    No pending requests at the moment.
-                </div>
+                <div id="empty-msg" class="text-center text-muted mt-3" style="display: none;">No pending requests.</div>
             </div>
         </div>
     </div>
 
-    <script>
-        // The host URL is now dynamically pulled so it works securely on any server
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const socket = new WebSocket(`${wsProtocol}//${window.location.hostname}:8001/ws`);
-        const TARGET_DATE = "2026-04-07";
-
-        // Global State for current session
-        let currentUser = { id: null, role: 'GUEST' };
-
-        // --- 1. AUTHENTICATION & CONNECTION ---
-        socket.onopen = function() {
-            authenticate();
-        };
-
-        function authenticate() {
-            const id = prompt("Enter Account ID (admin_1, user_alice, user_bob):");
-            if (!id) {
-                return authenticate(); // Loop until they provide an ID
-            }
-            
-            currentUser.id = id;
-            currentUser.role = (id.startsWith("admin")) ? "ADMIN" : "MEMBER";
-            
-            document.getElementById('user-display').innerText = `User: ${id} (${currentUser.role})`;
-            
-            // Reveal admin tools if authorized
-            if (currentUser.role === "ADMIN") {
-                document.getElementById('admin-nav').style.display = "block";
-            }
-        }
-
-        socket.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            renderGrid(data.grid[TARGET_DATE]);
-            
-            if (currentUser.role === "ADMIN") {
-                renderAdminQueue(data.pending);
-            }
-        };
-
-        socket.onclose = function() {
-            alert("Connection lost. Please refresh the page.");
-        };
-
-        // --- 2. RENDERING LOGIC ---
-        function renderGrid(dayData) {
-            const container = document.getElementById('timetable-container');
-            container.innerHTML = "";
-            
-            for (const [time, slot] of Object.entries(dayData)) {
-                const isOccupied = slot !== null;
-                const displayText = isOccupied ? `${slot.member_id}: ${slot.task}` : "[ Empty Slot ]";
-                
-                let btnClass = "btn-outline-secondary";
-                if (isOccupied) {
-                    btnClass = (slot.member_id.startsWith("admin")) ? "btn-warning" : "btn-info";
-                }
-
-                container.innerHTML += `
-                    <div class="d-flex align-items-center mb-2">
-                        <div class="fw-bold me-3 text-secondary" style="width: 70px;">${time}</div>
-                        <button class="btn ${btnClass} w-100 text-start slot-btn p-3" 
-                                onclick="handleClick('${time}', ${isOccupied})">
-                            ${displayText}
-                        </button>
-                    </div>`;
-            }
-        }
-
-        function renderAdminQueue(pending) {
-            const list = document.getElementById('pending-list');
-            const badge = document.getElementById('badge');
-            const emptyMsg = document.getElementById('empty-msg');
-            
-            badge.innerText = pending.length;
-            list.innerHTML = "";
-            
-            if (pending.length === 0) {
-                emptyMsg.style.display = "block";
-                return;
-            }
-            emptyMsg.style.display = "none";
-
-            pending.forEach(req => {
-                list.innerHTML += `
-                    <div class="list-group-item list-group-item-action mb-2 border rounded">
-                        <div class="d-flex w-100 justify-content-between align-items-center">
-                            <h6 class="mb-1 text-uppercase fw-bold text-primary">${req.action} Request</h6>
-                            <div class="btn-group">
-                                <button class="btn btn-sm btn-success" onclick="processApproval(${req.request_id}, true)">Approve</button>
-                                <button class="btn btn-sm btn-danger" onclick="processApproval(${req.request_id}, false)">Reject</button>
-                            </div>
-                        </div>
-                        <p class="mb-1"><b>User:</b> ${req.member_id} | <b>Time:</b> ${req.time} | <b>Task:</b> ${req.task || 'N/A'}</p>
-                        <small class="text-muted italic"><b>Reason:</b> ${req.reason}</small>
-                    </div>`;
-            });
-        }
-
-        // --- 3. SENDING COMMANDS TO SERVER ---
-        function handleClick(time, isOccupied) {
-            let action = "ADD";
-            let reason = "";
-
-            if (isOccupied) {
-                const choice = prompt("Slot is occupied!\nType 'O' to Overwrite.\nType 'D' to Delete.\n(Cancel to abort)");
-                if (!choice) return; 
-                
-                const c = choice.toUpperCase();
-                if (c === 'O') action = "OVERWRITE";
-                else if (c === 'D') action = "REMOVE";
-                else return alert("Invalid choice.");
-            }
-
-            // Notice we use currentUser.id instead of prompting for it again!
-            const uid = currentUser.id;
-
-            // Ensure Admin deletes map correctly
-            if (currentUser.role === "ADMIN" && action === "REMOVE") action = "ADMIN_REMOVE";
-
-            let task = "";
-            if (action === "ADD" || action === "OVERWRITE") {
-                task = prompt("Enter Task Description:");
-                if (!task) return alert("Task is required.");
-            }
-
-            reason = prompt(`Why are you performing this ${action}?`);
-            if (!reason) return alert("A reason is required for the audit trail.");
-
-            const payload = {
-                action: action,
-                member_id: uid,
-                target_member: uid, 
-                date: TARGET_DATE,
-                time: time,
-                task: task,
-                reason: reason
-            };
-
-            socket.send(JSON.stringify(payload));
-        }
-
-        function processApproval(reqId, approved) {
-            // Notice we no longer prompt for Admin Auth ID, we use the logged in session ID
-            const payload = {
-                action: "APPROVE_PENDING",
-                member_id: currentUser.id,
-                request_id: reqId,
-                approved: approved
-            };
-
-            socket.send(JSON.stringify(payload));
-        }
-    </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/network_client.js"></script>
 </body>
 </html>
