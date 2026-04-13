@@ -49,7 +49,7 @@
     <script>
         // The host URL is now dynamically pulled so it works securely on any server
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const socket = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
+        const socket = new WebSocket(`${wsProtocol}//${window.location.hostname}:8001/ws`);
         const TARGET_DATE = "2026-04-07";
 
         // Global State for current session
